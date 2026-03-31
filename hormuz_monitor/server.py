@@ -10,13 +10,14 @@ import logging
 import time
 from datetime import date
 
+import pandas as pd
+import requests
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-from .config import CACHE_TTL_SECONDS
+from .config import CACHE_TTL_SECONDS, BRENT_TICKER, DUBAI_TICKER, PORTWATCH_URL
 from .charts import generate_all_charts
 from .dashboard import generate_html
-from .data_store import load_history, DEFAULT_PATH
 from .fetchers import (
     _fetch_hormuz_tracker,
     fetch_brent_price,
@@ -37,6 +38,77 @@ app = FastAPI(title="Hormuz Crisis Monitor")
 _cache: dict = {"html": None, "ts": 0}
 
 
+def _fetch_history_from_apis() -> pd.DataFrame:
+    """
+    Build a YTD history DataFrame directly from APIs (no local CSV).
+    Fetches: Brent + Dubai from yfinance, ships from PortWatch.
+    """
+    from datetime import datetime
+
+    rows = {}
+
+    # Brent + Dubai from yfinance
+    try:
+        import yfinance as yf
+
+        for ticker, col in [(BRENT_TICKER, "brent"), (DUBAI_TICKER, "dubai_physical")]:
+            hist = yf.Ticker(ticker).history(start="2026-01-01")
+            for dt, row in hist.iterrows():
+                d = dt.strftime("%Y-%m-%d")
+                if d not in rows:
+                    rows[d] = {}
+                rows[d][col] = round(float(row["Close"]), 2)
+    except Exception as e:
+        logger.warning(f"yfinance history fetch failed: {e}")
+
+    # Ship count from PortWatch
+    try:
+        params = {
+            "where": "portid='chokepoint6' AND date >= timestamp '2026-01-01'",
+            "outFields": "date,n_total",
+            "orderByFields": "date ASC",
+            "resultRecordCount": 500,
+            "f": "json",
+        }
+        resp = requests.get(PORTWATCH_URL, params=params, timeout=30)
+        resp.raise_for_status()
+        for f in resp.json().get("features", []):
+            a = f["attributes"]
+            d = datetime.utcfromtimestamp(a["date"] / 1000).strftime("%Y-%m-%d")
+            if d not in rows:
+                rows[d] = {}
+            rows[d]["ship_count"] = a["n_total"]
+    except Exception as e:
+        logger.warning(f"PortWatch history fetch failed: {e}")
+
+    if not rows:
+        return pd.DataFrame()
+
+    # Build DataFrame
+    all_dates = sorted(rows.keys())
+    records = []
+    for d in all_dates:
+        r = rows[d]
+        brt = r.get("brent")
+        dub = r.get("dubai_physical")
+        spread = round(dub - brt, 2) if (brt and dub) else None
+        records.append({
+            "date": d,
+            "insurance_pct": None,
+            "ship_count": r.get("ship_count"),
+            "brent": brt,
+            "dubai_physical": dub,
+            "spread": spread,
+            "cliff_days": None,
+            "notes": "",
+        })
+
+    df = pd.DataFrame(records)
+    df["date"] = pd.to_datetime(df["date"])
+    logger.info(f"Built history: {len(df)} days from APIs")
+    return df
+
+
 def _build_dashboard() -> str:
     """Fetch all data, assess signals, generate full HTML dashboard."""
     today = date.today()
@@ -55,15 +127,12 @@ def _build_dashboard() -> str:
         assess_cliff(today),
     ]
 
-    # Load history for charts (if CSV exists)
-    try:
-        history = load_history(DEFAULT_PATH)
-    except Exception:
-        history = None
+    # Build history from APIs for charts
+    history = _fetch_history_from_apis()
 
-    # Generate charts from history
+    # Generate charts
     charts = {}
-    if history is not None and not history.empty:
+    if not history.empty:
         try:
             charts = generate_all_charts(history)
         except Exception as e:
