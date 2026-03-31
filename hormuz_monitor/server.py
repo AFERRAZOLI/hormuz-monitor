@@ -84,6 +84,30 @@ def _fetch_history_from_apis() -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
 
+    # Insurance premium milestones from news reports:
+    # S&P Global, Caixin, Al Jazeera, Modern Diplomacy, HormuzTracker API
+    _INSURANCE_MILESTONES = {
+        "2026-01-02": 0.125,
+        "2026-02-27": 0.125,
+        "2026-02-28": 0.40,
+        "2026-03-01": 0.625,
+        "2026-03-02": 1.00,
+        "2026-03-05": 1.50,
+        "2026-03-07": 2.00,
+        "2026-03-09": 3.50,
+        "2026-03-13": 5.00,
+        "2026-03-20": 4.00,
+        "2026-03-25": 2.50,
+    }
+    # Add current value from HormuzTracker if available
+    current_ins = fetch_insurance_premium()
+    if current_ins is not None:
+        _INSURANCE_MILESTONES[date.today().isoformat()] = current_ins
+
+    # Cliff target (latest cliff event date)
+    from .config import CLIFF_EVENTS
+    cliff_target = max((d for d, _ in CLIFF_EVENTS), default=date.today())
+
     # Build DataFrame
     all_dates = sorted(rows.keys())
     records = []
@@ -92,6 +116,7 @@ def _fetch_history_from_apis() -> pd.DataFrame:
         brt = r.get("brent")
         dub = r.get("dubai_physical")
         spread = round(dub - brt, 2) if (brt and dub) else None
+        d_date = date.fromisoformat(d)
         records.append({
             "date": d,
             "insurance_pct": None,
@@ -99,12 +124,22 @@ def _fetch_history_from_apis() -> pd.DataFrame:
             "brent": brt,
             "dubai_physical": dub,
             "spread": spread,
-            "cliff_days": None,
+            "cliff_days": (cliff_target - d_date).days,
             "notes": "",
         })
 
+    # Interpolate insurance from milestones
+    import numpy as np
+    ins_series = pd.Series(_INSURANCE_MILESTONES, dtype=float)
+    ins_series.index = pd.to_datetime(ins_series.index)
+
     df = pd.DataFrame(records)
     df["date"] = pd.to_datetime(df["date"])
+
+    # Interpolate insurance premium across all dates
+    interpolated = ins_series.reindex(df["date"]).interpolate(method="linear")
+    df["insurance_pct"] = interpolated.values
+
     logger.info(f"Built history: {len(df)} days from APIs")
     return df
 
