@@ -141,7 +141,7 @@ def generate_html(
           <thead>
             <tr style="border-bottom:2px solid #333;text-align:right">
               <th style="text-align:left">Date</th>
-              <th>Insurance %</th>
+              <th>Insurance %*</th>
               <th>Ships</th>
               <th>Brent</th>
               <th>Dubai Phys</th>
@@ -149,7 +149,8 @@ def generate_html(
             </tr>
           </thead>
           <tbody>{hist_rows}</tbody>
-        </table>"""
+        </table>
+        <p style="font-size:.75em;color:#999">*Insurance values are interpolated from news-reported milestones (S&amp;P Global, Caixin, Al Jazeera). Not direct market data.</p>"""
 
     return _render_html(as_of, signal_rows, history_section, charts, tracker_data)
 
