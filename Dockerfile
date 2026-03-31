@@ -6,7 +6,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY hormuz_monitor/ hormuz_monitor/
+COPY start.py .
 
-ENV PORT=8000
-
-CMD uvicorn hormuz_monitor.server:app --host 0.0.0.0 --port $PORT
+CMD ["python", "start.py"]
