@@ -9,6 +9,4 @@ COPY hormuz_monitor/ hormuz_monitor/
 
 ENV PORT=8000
 
-EXPOSE ${PORT}
-
-CMD ["sh", "-c", "uvicorn hormuz_monitor.server:app --host 0.0.0.0 --port ${PORT}"]
+CMD uvicorn hormuz_monitor.server:app --host 0.0.0.0 --port $PORT
